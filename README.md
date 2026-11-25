@@ -22,7 +22,7 @@ macOS 13 Ventura is the minimum, though it has only been tested on newer version
 
 Reads:
 
-- The photos and videos in the folders you tick, and in the folder the duplicate check looks in (above the grid; by default the destination's parent folder).
+- The photos and videos in the folders you tick, and in the folder the duplicate check looks in (above the grid; by default the Photomator library that holds the destination, else the Pictures folder or the destination's parent).
 - Photomator's sidebar folders from its list, `~/Library/Group Containers/4R6749AYRE.com.pixelmator/Library/Files Library/FilesLibrary.plist`. Read only.
 
 Writes, only when you press **Import**:
