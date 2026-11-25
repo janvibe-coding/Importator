@@ -69,10 +69,19 @@ public struct ScopeIndex: Sendable {
 /// Not thread-safe: use one instance from one thread or queue at a time.
 public final class ImportScanner {
     private let reader: MetadataReader
-    private var hashes: [URL: String?] = [:]
+    private var hashes: [URL: (stamp: FileStamp?, value: String?)] = [:]
+    /// The app's cache folder: ~/Library/Caches/io.github.janvibe-coding.Importator.
+    public static var defaultCacheFolder: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("io.github.janvibe-coding.Importator", isDirectory: true)
+    }
 
-    public init(exifTool: ExifTool) {
+    /// Where check-folder caches are kept; nil reads everything every time.
+    private let cacheFolder: URL?
+
+    public init(exifTool: ExifTool, cacheFolder: URL? = nil) {
         reader = MetadataReader(exifTool: exifTool)
+        self.cacheFolder = cacheFolder
     }
 
     public func readSource(_ picks: [FolderPick], onProgress: (Int) -> Void = { _ in }) throws -> SourceRead {
@@ -86,11 +95,34 @@ public final class ImportScanner {
     /// Reads every media file under the scope. Fingerprints computed before are forgotten, since
     /// the files may have changed.
     public func readScope(_ scope: URL, onProgress: (_ done: Int, _ total: Int) -> Void = { _, _ in }) throws -> ScopeIndex {
-        hashes = [:]
         let found = SourceScanner.scan([scope], recursive: true)
         try Task.checkCancellation()
         onProgress(0, found.files.count)
-        let metadata = try reader.read(found.files) { onProgress($0, found.files.count) }
+
+        // Files unchanged since the last read keep their metadata; the rest are read.
+        var cache = cacheFolder.map { ScopeCache(folder: $0, scope: scope) }
+        let stamps = Dictionary(uniqueKeysWithValues: found.files.map { ($0, FileStamp($0.url)) })
+        var metadata: [MediaFile: Metadata] = [:]
+        var toRead: [MediaFile] = []
+        for file in found.files {
+            if let known = cache?.metadata(for: file.url, stamp: stamps[file] ?? nil) {
+                metadata[file] = known
+            } else {
+                toRead.append(file)
+            }
+        }
+        let reused = metadata.count
+        onProgress(reused, found.files.count)
+        metadata.merge(try reader.read(toRead) { onProgress(reused + $0, found.files.count) }) { a, _ in a }
+        if cache != nil {
+            var fresh: [String: ScopeCache.Entry] = [:]
+            for file in found.files {
+                if let stamp = stamps[file] ?? nil, let known = metadata[file], !known.unreadable {
+                    fresh[file.url.path] = ScopeCache.Entry(stamp: stamp, metadata: known)
+                }
+            }
+            cache!.save(fresh)
+        }
         var index: [MatchKey: [MediaFile]] = [:]
         for file in found.files {
             let fileMetadata = metadata[file]!
@@ -123,10 +155,12 @@ public final class ImportScanner {
         return results
     }
 
+    /// Each file is hashed once, until its size or modification date changes.
     private func fingerprint(_ file: MediaFile, _ metadata: Metadata) -> String? {
-        if let cached = hashes[file.url] { return cached }
+        let stamp = FileStamp(file.url)
+        if let cached = hashes[file.url], cached.stamp == stamp { return cached.value }
         let value = try? Fingerprint.compute(file.url, method: Fingerprint.method(for: file, metadata))
-        hashes[file.url] = value
+        hashes[file.url] = (stamp, value)
         return value
     }
 

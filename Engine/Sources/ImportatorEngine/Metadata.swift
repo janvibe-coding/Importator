@@ -3,7 +3,7 @@ import ImageIO
 
 /// What Importator knows about one file. Dates are kept as ExifTool/Exif strings
 /// (`yyyy:MM:dd HH:mm:ss`), without time zone.
-public struct Metadata: Hashable, Sendable {
+public struct Metadata: Hashable, Sendable, Codable {
     /// The content type: ImageIO's type for photos (a phone's `.jpg` can be HEIC), the
     /// extension for videos.
     public var contentType: String?
@@ -66,8 +66,13 @@ public final class MetadataReader {
         let photos = files.filter { $0.kind == .photo }
         let videos = files.filter { $0.kind == .video }
 
-        var result = Self.readWithImageIO(photos)
-        onProgress(result.count)
+        // In blocks, so a long read can be stopped and reports progress.
+        var result: [MediaFile: Metadata] = [:]
+        for block in photos.chunked(500) {
+            try Task.checkCancellation()
+            result.merge(Self.readWithImageIO(Array(block))) { a, _ in a }
+            onProgress(result.count)
+        }
 
         let missing = photos.filter { result[$0]?.exifDate == nil }
         for batch in missing.chunked(Self.batchSize) {

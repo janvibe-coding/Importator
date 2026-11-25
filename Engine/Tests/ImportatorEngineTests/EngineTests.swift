@@ -262,3 +262,32 @@ let hasTestData = FileManager.default.fileExists(atPath: testData.appendingPathC
     #expect(cell.isFullyFound(both))
     #expect(cell.filesToImport(both) == [raw, jpg])
 }
+
+// MARK: Check-folder cache
+
+@Test func cacheReusesUnchangedFilesAndRereadsChangedOnes() throws {
+    let root = try makeTempFolder()
+    let card = root.appendingPathComponent("card")
+    let library = root.appendingPathComponent("library")
+    let cache = root.appendingPathComponent("cache")
+    try writeJPEG(card.appendingPathComponent("A.JPG"), date: "2026:10:03 13:47:02")
+    try writeJPEG(library.appendingPathComponent("old/A.JPG"), date: "2026:10:03 13:47:02")
+    try writeJPEG(library.appendingPathComponent("old/B.JPG"), date: "2026:10:03 13:47:09")
+
+    let tool = try ExifTool()
+    defer { tool.close() }
+    let scanner = ImportScanner(exifTool: tool, cacheFolder: cache)
+    var progress: [(Int, Int)] = []
+    _ = try scanner.readScope(library)
+    let second = try scanner.readScope(library) { progress.append(($0, $1)) }
+    #expect(second.files.count == 2)
+    #expect(progress.contains { $0 == (2, 2) })  // both reused before anything was read
+
+    // A changed file is read again: the library's A now has another date.
+    try writeJPEG(library.appendingPathComponent("old/A.JPG"), date: "2026:07:01 10:00:00")
+    try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(60)],
+                                          ofItemAtPath: library.appendingPathComponent("old/A.JPG").path)
+    let report = try scanner.match(try scanner.readSource([FolderPick(url: card, recursive: true)]),
+                                   in: try scanner.readScope(library), fingerprints: false)
+    #expect(report.values.allSatisfy { !$0.isDuplicate })
+}

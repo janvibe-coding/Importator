@@ -30,12 +30,14 @@ enum Activity: Equatable {
     case idle
     case readingSource
     case checking(done: Int, total: Int)
-    case importing(done: Int64, total: Int64)
+    case importing(stage: ImportProgress.Stage, done: Int64, total: Int64)
 }
 
 @MainActor
 final class AppModel: ObservableObject {
+    /// Two workers, so reading the source (and its thumbnails) never waits for the library.
     private let worker = EngineWorker()
+    private let scopeWorker = EngineWorker(cacheFolder: ImportScanner.defaultCacheFolder)
     private let defaults = UserDefaults.standard
 
     // Source
@@ -51,8 +53,11 @@ final class AppModel: ObservableObject {
     @Published private(set) var previewItems: [URL] = []
     @Published private(set) var activity: Activity = .idle
     @Published private(set) var lastResult: String?
-    @Published var failures: [String] = []
-    @Published var showFailures = false
+    /// The end-of-import report: files not copied, and files copied without their date.
+    @Published private(set) var notCopied: [String] = []
+    @Published private(set) var withoutDate: [String] = []
+    @Published var showReport = false
+    @Published private(set) var ejectError: String?
     private var anchor: String?
 
     // Destination
@@ -66,6 +71,7 @@ final class AppModel: ObservableObject {
     @Published var rename: Bool { didSet { defaults.set(rename, forKey: "rename") } }
     @Published var copyChoice: CopyChoice { didSet { defaults.set(copyChoice.rawValue, forKey: "copy") } }
     @Published var fixDates: Bool { didSet { defaults.set(fixDates, forKey: "fixDates") } }
+    @Published var verify: Bool { didSet { defaults.set(verify, forKey: "verify") } }
     @Published var zoom: Double { didSet { defaults.set(zoom, forKey: "zoom") } }
     @Published var fingerprints = false {
         didSet { if fingerprints != oldValue { refresh(readSource: false, readScope: false) } }
@@ -82,6 +88,7 @@ final class AppModel: ObservableObject {
         rename = defaults.bool(forKey: "rename")
         copyChoice = CopyChoice(rawValue: defaults.string(forKey: "copy") ?? "") ?? .rawAndJPG
         fixDates = defaults.bool(forKey: "fixDates")
+        verify = defaults.bool(forKey: "verify")
         zoom = defaults.object(forKey: "zoom") as? Double ?? 160
         sourceFolders = (defaults.stringArray(forKey: "sourceFolders") ?? []).map {
             FolderNode(url: URL(fileURLWithPath: $0, isDirectory: true), kind: .folder)
@@ -126,7 +133,7 @@ final class AppModel: ObservableObject {
                 print("before import: \(self.checkedCount) of \(self.allCells.count), canImport \(self.canImport)")
                 self.startImport()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 8) {
-                    print("after import: \(self.lastResult ?? "-"), \(self.checkedCount) of \(self.allCells.count), failures \(self.failures)")
+                    print("after import: \(self.lastResult ?? "-"), \(self.checkedCount) of \(self.allCells.count), not copied \(self.notCopied), without date \(self.withoutDate)")
                     snapshot(path.replacingOccurrences(of: ".png", with: "-after.png"))
                 }
             }
@@ -214,7 +221,7 @@ final class AppModel: ObservableObject {
         let picks = picks
         let scope = scope
         let fingerprints = fingerprints
-        checkTask = Task { [weak self, worker] in
+        checkTask = Task { [weak self, worker, scopeWorker] in
             guard let self else { return }
             do {
                 if readSource || self.source == nil {
@@ -237,7 +244,7 @@ final class AppModel: ObservableObject {
                 }
                 if readScope || self.index?.scope != scope {
                     self.activity = .checking(done: 0, total: 0)
-                    let index = try await worker.readScope(scope, progress: Self.reporter(self))
+                    let index = try await scopeWorker.readScope(scope, progress: Self.reporter(self))
                     try Task.checkCancellation()
                     self.index = index
                 }
@@ -397,7 +404,7 @@ final class AppModel: ObservableObject {
         defaults.set(url.path, forKey: "destination")
         let scopes = defaults.dictionary(forKey: "scopes") as? [String: String] ?? [:]
         let saved = scopes[url.path].map { URL(fileURLWithPath: $0, isDirectory: true) }
-        setScope(saved ?? Self.defaultScope(for: url), remember: false)
+        setScope(saved ?? defaultScope(for: url), remember: false)
     }
 
     func chooseScope() {
@@ -416,8 +423,18 @@ final class AppModel: ObservableObject {
         if source != nil { refresh(readSource: false, readScope: true) }
     }
 
-    /// The destination's parent, unless that is a volume list or a home folder.
-    static func defaultScope(for destination: URL) -> URL {
+    /// The library the destination belongs to: the Photomator sidebar folder that holds it.
+    /// Without one, the Pictures folder when the destination is in it, else the destination's
+    /// parent (or the destination itself when that is a volume list or a home folder).
+    func defaultScope(for destination: URL) -> URL {
+        let key = destination.folderKey
+        if let library = sidebarFolders.map(\.url).first(where: { key.hasPrefix($0.folderKey) }) {
+            return library
+        }
+        if let pictures = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first,
+           key.hasPrefix(pictures.folderKey) {
+            return pictures
+        }
         let parent = destination.deletingLastPathComponent()
         let tooWide = ["/", "/Volumes/", URL(fileURLWithPath: NSHomeDirectory()).folderKey]
         return tooWide.contains(parent.folderKey) ? destination : parent
@@ -446,48 +463,77 @@ final class AppModel: ObservableObject {
     func startImport() {
         guard canImport, let source, let target = importTarget else { return }
         let selected = Set(allCells.filter(isChecked).flatMap { $0.cell.filesToImport(results) })
-        let options = ImportOptions(rename: rename, copy: copyChoice, fixDates: fixDates)
+        let options = ImportOptions(rename: rename, copy: copyChoice, fixDates: fixDates, verify: verify)
         let cells = source.cells
         let results = results
         let sourceFolders = picks.map(\.url)
-        activity = .importing(done: 0, total: 1)
+        activity = .importing(stage: .copying, done: 0, total: 1)
         lastResult = nil
 
-        let progress: @Sendable (Int64, Int64) -> Void = { [weak self] done, total in
+        let progress: @Sendable (ImportProgress) -> Void = { [weak self] progress in
             Task { @MainActor in
                 guard let self, case .importing = self.activity else { return }
-                self.activity = .importing(done: done, total: max(total, 1))
+                self.activity = .importing(stage: progress.stage, done: progress.done, total: max(progress.total, 1))
             }
         }
         importTask = Task { [weak self, worker] in
             var message: String
-            var failed: [String] = []
+            var notCopied: [String] = []
+            var withoutDate: [String] = []
             do {
                 let outcome = try await worker.runImport(
                     cells: cells, results: results, selected: selected, sourceFolders: sourceFolders,
                     destination: target, options: options, progress: progress
                 )
                 message = "\(outcome.copied.count) copied"
-                failed = outcome.failed.map { "\($0.source.path)\n\($0.reason)" }
+                if !outcome.dateNotFixed.isEmpty { message += ", \(outcome.dateNotFixed.count) without date" }
+                if !outcome.failed.isEmpty { message += ", \(outcome.failed.count) not copied" }
+                notCopied = outcome.failed.map { "\($0.source.url.lastPathComponent)\n\($0.reason)" }
+                withoutDate = outcome.dateNotFixed.map { "\($0.copy.lastPathComponent)\n\($0.reason)" }
             } catch is CancellationError {
                 message = "Stopped"
             } catch CopierError.notEnoughSpace(let needed, let available) {
                 message = "Not copied"
                 let format = ByteCountFormatter()
-                failed = ["Not enough space: \(format.string(fromByteCount: needed)) needed, \(format.string(fromByteCount: available)) free."]
+                notCopied = ["Not enough space at the destination: \(format.string(fromByteCount: needed)) needed, \(format.string(fromByteCount: available)) free."]
+            } catch CopierError.destinationInsideSource {
+                message = "Not copied"
+                notCopied = ["The destination is inside a ticked source folder."]
             } catch {
                 message = "Not copied"
-                failed = ["\(error)"]
+                notCopied = [Copier.explain(error)]
             }
             guard let self else { return }
             self.activity = .idle
             self.lastResult = message
-            self.failures = failed
-            self.showFailures = !failed.isEmpty
+            self.notCopied = notCopied
+            self.withoutDate = withoutDate
+            self.showReport = !notCopied.isEmpty || !withoutDate.isEmpty
             self.overrides = [:]
             self.refresh(readSource: true, readScope: true)
         }
     }
+
+    var isImporting: Bool {
+        if case .importing = activity { return true }
+        return false
+    }
+
+    /// Ejects a card. When it's gone, macOS's unmount notice takes it out of the list and grid.
+    func eject(_ card: FolderNode) {
+        guard !isImporting else { return }
+        let volume = card.url
+        Task.detached {
+            do {
+                try NSWorkspace.shared.unmountAndEjectDevice(at: volume)
+            } catch {
+                let reason = (error as NSError).localizedDescription
+                await MainActor.run { self.ejectError = "\(card.title) couldn't be ejected. \(reason)" }
+            }
+        }
+    }
+
+    func clearEjectError() { ejectError = nil }
 
     func cancelImport() { importTask?.cancel() }
 }

@@ -1,6 +1,6 @@
 # Importator: specification
 
-Version 1.0. Describes what the app does and why it does it that way.
+Version 2.0. Describes what the app does and why it does it that way.
 
 Importator is a native Mac app that copies photos and videos from a card or folder into a
 library folder, leaves out files that are already there, and fills in a missing capture time
@@ -32,7 +32,7 @@ Three panels and a bottom bar, like Lightroom's import. No explanatory text on s
 ### Source
 
 - **Drives:** every mounted volume. A volume with a DCIM folder is a card: it opens with its
-  DCIM folder ticked, at launch and when it's inserted.
+  DCIM folder ticked, at launch and when it's inserted. A ⏏ button next to a card ejects it.
 - **Folders:** folders added with "Choose folder…", remembered.
 
 Ticking a folder ticks all its subfolders; each subfolder can be unticked. Every photo and
@@ -41,7 +41,8 @@ video in the ticked folders is shown.
 ### Grid
 
 The files grouped by capture day, each cell with a tick box. "Check all · Uncheck all" and a
-zoom slider at the top.
+zoom slider at the top, and below them the duplicate check: "Check duplicates in <folder> [Choose…]
+[By metadata | By content (slow)]". The columns can be resized.
 
 - A RAW and its JPG (same base name, same folder) share one cell. They remain two separate
   files in every other respect.
@@ -62,13 +63,14 @@ zoom slider at the top.
 - **Folders:** folders added with "Choose folder…", remembered. The Pictures folder at first
   start when there are no sidebar folders.
 - Subfolder (tick box and name), Rename ("date + original name": `20261003-IMG_1234`), Copy
-  (RAW+JPG / RAW / JPG for pairs), Fix missing date, Compare fingerprints (off at every launch).
-- Check duplicates in: a folder, remembered per destination. Default: the destination's parent.
+  (RAW+JPG / RAW / JPG for pairs), Fix missing date, Verify copies.
+- The duplicate check's folder is remembered per destination. Default: the Photomator sidebar
+  folder that holds the destination; without one, the Pictures folder or the destination's parent.
 
 ### Bottom bar
 
-"N of M selected" and Import. Import copies straight away, with a progress bar, and lists any
-file that failed. There is no review step.
+"N of M selected" and Import. Import copies straight away, with a progress bar, and reports the
+files not copied and the files copied without a fixed date. There is no review step.
 
 ## Duplicate check
 
@@ -85,8 +87,11 @@ import, and whenever the app becomes active. Metadata only by default:
 - A photo with none of these is matched on the date it would get (name or file date).
 - Each file is checked on its own. The ticked source folders are left out of the check.
 - File names are never used. Paths are compared in Unicode NFC.
+- A cache keeps each file's metadata with its size and modification date, so a second read of a
+  large library (70,000 files: 48 s the first time) takes seconds. It's rebuilt from the files on
+  every read and never trusted over them.
 
-With Compare fingerprints on, every metadata match is confirmed on content. Only matches are
+By content (slow): every metadata match is confirmed on content. Only matches are
 hashed:
 
 | Type | Fingerprint | Why |
@@ -97,7 +102,7 @@ hashed:
 | HEIC | Whole file | Not tested otherwise |
 
 Phones may write no subseconds, so two shots in the same second match on metadata alone.
-Compare fingerprints settles it.
+Checking by content settles it.
 
 ## Missing capture time
 
@@ -128,6 +133,13 @@ and then replaces the original in one step.
 
 ## Copying
 
+An import has three steps, always in this order: copy every ticked file unchanged; verify each
+copy against its original (with Verify copies on); then write missing dates (with Fix missing
+date on). The photo matters more than its date: a date that can't be written leaves the copy as
+the unchanged original. Verify reads the original once while copying (SHA-256), writes the copy
+past the file cache, reads it back and compares; a copy that differs is made again straight away,
+up to three times, and reported if it keeps differing.
+
 - Copy, never move. Copies keep the source's creation and modification dates.
 - Each file is written under a hidden temporary name and renamed when complete, with a rename
   that can't replace an existing file. Leftover temporary files are removed on the next import.
@@ -148,6 +160,6 @@ Minimum macOS 13. App Sandbox off. ExifTool is bundled and run with macOS's Perl
 - A plan or review step before Import.
 - Undo, an import log, an "imported before" state.
 - Time zone fixes.
-- Hashing unless Compare fingerprints is on.
+- Hashing unless the duplicate check is set to By content.
 - Writing anything to Photomator.
-- Import presets, a second copy, ejecting the card.
+- Import presets, a second copy.

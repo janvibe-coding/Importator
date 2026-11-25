@@ -224,3 +224,87 @@ private func names(_ folder: URL) throws -> [String] {
     let data = try PropertyListSerialization.data(fromPropertyList: list, format: .binary, options: 0)
     #expect(try SidebarReader.folders(inList: data).map(\.lastPathComponent) == ["library", "jpg library"])
 }
+
+// MARK: Version 2: copy first, check, then dates
+
+/// A file with a JPG start that no tool can write into, named so it gets a date from its name.
+private func writeBrokenJPEG(_ url: URL) throws {
+    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10] + Array(repeating: 0x37, count: 3000)).write(to: url)
+}
+
+@Test func aDateThatCantBeWrittenStillCopiesTheFile() throws {
+    let root = try makeTempFolder()
+    let card = root.appendingPathComponent("card")
+    let destination = root.appendingPathComponent("library/import")
+    let broken = card.appendingPathComponent("PICT_20261003_134702.jpg")
+    try writeBrokenJPEG(broken)
+    try writeJPEG(card.appendingPathComponent("IMG_20261003_134705.jpg"), date: nil)
+
+    let tool = try ExifTool()
+    defer { tool.close() }
+    let (_, outcome) = try importAll(tool, card: card, library: root.appendingPathComponent("library"),
+                                     destination: destination, options: ImportOptions(fixDates: true))
+    #expect(outcome.failed.isEmpty)
+    #expect(outcome.copied.count == 2)
+    #expect(outcome.datesFixed == 1)
+    #expect(outcome.dateNotFixed.map(\.source.url.lastPathComponent) == ["PICT_20261003_134702.jpg"])
+    #expect(try Data(contentsOf: destination.appendingPathComponent("PICT_20261003_134702.jpg")) == Data(contentsOf: broken))
+    #expect(try names(destination) == ["IMG_20261003_134705.jpg", "PICT_20261003_134702.jpg"])
+}
+
+@Test func verifiedCopiesAreIdenticalAndThenGetTheirDate() throws {
+    let root = try makeTempFolder()
+    let card = root.appendingPathComponent("card")
+    let destination = root.appendingPathComponent("library/import")
+    try writeJPEG(card.appendingPathComponent("A.JPG"), date: "2026:10:03 13:47:02")
+    try writeJPEG(card.appendingPathComponent("IMG_20261003_134705.jpg"), date: nil)
+    let old = Date(timeIntervalSince1970: 1_790_000_000)
+    try FileManager.default.setAttributes([.modificationDate: old, .creationDate: old],
+                                          ofItemAtPath: card.appendingPathComponent("A.JPG").path)
+
+    let tool = try ExifTool()
+    defer { tool.close() }
+    let (_, outcome) = try importAll(tool, card: card, library: root.appendingPathComponent("library"),
+                                     destination: destination, options: ImportOptions(fixDates: true, verify: true))
+    #expect(outcome.failed.isEmpty && outcome.dateNotFixed.isEmpty)
+    #expect(outcome.verified == 2 && outcome.recopied == 0 && outcome.datesFixed == 1)
+    #expect(try Data(contentsOf: destination.appendingPathComponent("A.JPG")) == Data(contentsOf: card.appendingPathComponent("A.JPG")))
+    #expect(try FileManager.default.attributesOfItem(atPath: destination.appendingPathComponent("A.JPG").path)[.modificationDate] as? Date == old)
+    #expect(MetadataReader.readWithImageIO(destination.appendingPathComponent("IMG_20261003_134705.jpg")).exifDate == "2026:10:03 13:47:05")
+}
+
+@Test func aCopyThatDiffersIsCopiedAgainStraightAway() throws {
+    let root = try makeTempFolder()
+    let card = root.appendingPathComponent("card")
+    let destination = root.appendingPathComponent("library/import")
+    try writeJPEG(card.appendingPathComponent("DAMAGEONCE.JPG"), date: "2026:10:03 13:47:02")
+
+    let tool = try ExifTool()
+    defer { tool.close() }
+    Copier.damage.set("DAMAGEONCE.JPG", times: 1)
+    let (_, outcome) = try importAll(tool, card: card, library: root.appendingPathComponent("library"),
+                                     destination: destination, options: ImportOptions(verify: true))
+    #expect(outcome.failed.isEmpty)
+    #expect(outcome.recopied == 1)
+    #expect(try Data(contentsOf: destination.appendingPathComponent("DAMAGEONCE.JPG"))
+        == Data(contentsOf: card.appendingPathComponent("DAMAGEONCE.JPG")))
+    #expect(try names(destination) == ["DAMAGEONCE.JPG"])
+}
+
+@Test func aCopyThatKeepsDifferingIsReportedAndNotLeftBehind() throws {
+    let root = try makeTempFolder()
+    let card = root.appendingPathComponent("card")
+    let destination = root.appendingPathComponent("library/import")
+    try writeJPEG(card.appendingPathComponent("DAMAGEALWAYS.JPG"), date: "2026:10:03 13:47:02")
+    try writeJPEG(card.appendingPathComponent("B.JPG"), date: "2026:10:03 13:47:03")
+
+    let tool = try ExifTool()
+    defer { tool.close() }
+    Copier.damage.set("DAMAGEALWAYS.JPG", times: 3)
+    let (_, outcome) = try importAll(tool, card: card, library: root.appendingPathComponent("library"),
+                                     destination: destination, options: ImportOptions(verify: true))
+    #expect(outcome.failed.map(\.source.url.lastPathComponent) == ["DAMAGEALWAYS.JPG"])
+    #expect(outcome.failed.first?.reason.contains("3 times") == true)
+    #expect(try names(destination) == ["B.JPG"])
+}

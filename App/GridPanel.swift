@@ -20,6 +20,28 @@ struct GridPanel: View {
             }
             .padding(.horizontal, 12)
             .frame(height: 32)
+            HStack(spacing: 8) {
+                Text("Check duplicates in")
+                    .lineLimit(1)
+                    .fixedSize()
+                Text(model.scope.map(DestinationPanel.shortPath) ?? "–")
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                    .foregroundColor(.secondary)
+                    .help(model.scope?.path ?? "")
+                Button("Choose…") { model.chooseScope() }
+                    .disabled(model.destination == nil)
+                Picker("", selection: $model.fingerprints) {
+                    Text("By metadata").tag(false)
+                    Text("By content (slow)").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 32)
             Divider()
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: model.zoom, maximum: model.zoom * 1.4), spacing: 10)],

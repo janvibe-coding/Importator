@@ -4,12 +4,17 @@ import Foundation
 actor EngineWorker {
     private var exifTool: ExifTool?
     private var scanner: ImportScanner?
+    private let cacheFolder: URL?
+
+    init(cacheFolder: URL? = nil) {
+        self.cacheFolder = cacheFolder
+    }
 
     private func tool() throws -> ExifTool {
         if let exifTool { return exifTool }
         let made = try ExifTool()
         exifTool = made
-        scanner = ImportScanner(exifTool: made)
+        scanner = ImportScanner(exifTool: made, cacheFolder: cacheFolder)
         return made
     }
 
@@ -33,7 +38,7 @@ actor EngineWorker {
 
     func runImport(cells: [Cell], results: [MediaFile: FileResult], selected: Set<MediaFile>,
                    sourceFolders: [URL], destination: URL, options: ImportOptions,
-                   progress: @escaping @Sendable (Int64, Int64) -> Void) throws -> ImportOutcome {
+                   progress: @escaping @Sendable (ImportProgress) -> Void) throws -> ImportOutcome {
         try Copier(exifTool: tool()).run(
             cells: cells, results: results, selected: selected, sourceFolders: sourceFolders,
             destination: destination, options: options, onProgress: progress

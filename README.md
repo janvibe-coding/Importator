@@ -2,11 +2,13 @@
 
 Copies photos and videos from a card or folder into your library folder, leaves out the ones that are already there, and fills in a missing capture time on the copies. Made to sit next to [Photomator](https://www.pixelmator.com/photomator/)'s Files browser, but it works with any folder-based library.
 
-- **Duplicates are found by what's in the files**, not by name: capture time, camera, file type and pixel size (creation time, duration and device for videos). Renamed copies and wrapped camera counters don't fool it. Optionally every match is confirmed by a fingerprint of the image data, so a JPG whose rating was changed still counts as the same photo.
+- **Duplicates are found by what's in the files**, not by name: capture time, camera, file type and pixel size (creation time, duration and device for videos). Renamed copies and wrapped camera counters don't fool it. Set to **By content**, every match is also confirmed on the image data, so a JPG whose rating was changed still counts as the same photo.
 - **Missing capture times are filled in on the copy.** Some phones (the Xiaomi 17 Ultra, for one) write the capture time of their DNGs where most apps don't look, so those photos show up without a date. Importator writes it into the standard place. Photos with no date at all get one from their file name or file date, marked as a guess.
-- **Fix Missing Dates** (File menu) does the same for folders you imported earlier.
+- **Copies can be verified.** With **Verify copies** on, every copy is read back from the disk and compared with its original; a copy that differs is made again straight away.
+- **The photo comes first.** Dates are written only after everything is copied (and verified). If a date can't be written, the file is still copied, unchanged, and the report says so.
+- **Fix Missing Dates** (File menu) writes dates into folders you imported earlier.
 
-Three panels, like Lightroom's import: the source (drives and folders; a card opens with its DCIM folder ticked), the photos grouped by day, and the destination (Photomator's sidebar folders and your own). Duplicates show dimmed and unticked; hover to see where the existing copy is. Space opens a large preview.
+Three panels, like Lightroom's import: the source (drives and folders; a card opens with its DCIM folder ticked, and has an eject button), the photos grouped by day, and the destination (Photomator's sidebar folders and your own). Duplicates show dimmed and unticked; hover to see where the existing copy is. Space opens a large preview.
 
 ## Install
 
@@ -20,13 +22,13 @@ macOS 13 Ventura is the minimum, though it has only been tested on newer version
 
 Reads:
 
-- The photos and videos in the folders you tick, and in the folder you choose under **Check duplicates in** (by default the destination's parent folder).
+- The photos and videos in the folders you tick, and in the folder the duplicate check looks in (above the grid; by default the destination's parent folder).
 - Photomator's sidebar folders from its list, `~/Library/Group Containers/4R6749AYRE.com.pixelmator/Library/Files Library/FilesLibrary.plist`. Read only.
 
 Writes, only when you press **Import**:
 
 - Copies of the ticked files into the destination folder. Each copy is written under a temporary name and renamed when complete; an existing file is never replaced (a copy whose name is taken gets `-2`). Copies keep the original's file dates. Nothing on the source is changed.
-- With **Fix missing date** on: `DateTimeOriginal` and `CreateDate` in the Exif data of the copy. The copy is checked before it lands: the date must read back, and a JPG's or DNG's image data must be unchanged.
+- With **Fix missing date** on, after all files are copied: `DateTimeOriginal` and `CreateDate` in the Exif data of the copy. Each date goes into a temporary copy first; the date must read back and a JPG's or DNG's image data must be unchanged before it replaces the copy.
 
 **Fix Missing Dates** writes the same two fields into files in the folder you choose, after you press **Fix**. Each file is copied beside itself, fixed and checked there, and then replaces the original. Keep your own backup of your photos.
 

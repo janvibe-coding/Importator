@@ -6,9 +6,9 @@ import ImportatorEngine
 // scan and info only read. import copies into the destination; it never changes the source.
 
 let usage = """
-usage: importator scan --source <folder> [--source <folder> …] --scope <folder> [--fingerprints] [--flat]
+usage: importator scan --source <folder> [--source <folder> …] --scope <folder> [--fingerprints] [--flat] [--cache]
        importator import --source <folder> [--source …] --dest <folder> [--subfolder <name>]
-                         [--scope <folder>] [--rename] [--copy raw+jpg|raw|jpg] [--fix-dates]
+                         [--scope <folder>] [--rename] [--copy raw+jpg|raw|jpg] [--fix-dates] [--verify]
                          [--fingerprints] [--include-duplicates]
        importator info <file> …
        importator sidebar
@@ -64,6 +64,7 @@ do {
         var scope: URL?
         var fingerprints = false
         var recursive = true
+        var cache = false
         var i = 0
         func value() -> String {
             i += 1
@@ -76,6 +77,7 @@ do {
             case "--scope": scope = folderURL(value())
             case "--fingerprints": fingerprints = true
             case "--flat": recursive = false
+            case "--cache": cache = true
             default: fail(usage)
             }
             i += 1
@@ -83,7 +85,7 @@ do {
         guard let scope, !sources.isEmpty else { fail(usage) }
 
         let start = Date()
-        let report = try ImportScanner(exifTool: exifTool).scan(
+        let report = try ImportScanner(exifTool: exifTool, cacheFolder: cache ? ImportScanner.defaultCacheFolder : nil).scan(
             sources: sources, recursive: recursive, scope: scope, fingerprints: fingerprints
         )
         let scopePrefix = scope.folderKey
@@ -143,6 +145,7 @@ do {
             case "--scope": scope = folderURL(value())
             case "--rename": options.rename = true
             case "--fix-dates": options.fixDates = true
+            case "--verify": options.verify = true
             case "--fingerprints": fingerprints = true
             case "--include-duplicates": includeDuplicates = true
             case "--copy":
@@ -167,13 +170,20 @@ do {
         let outcome = try Copier(exifTool: exifTool).run(
             cells: report.cells, results: report.results, selected: selected,
             sourceFolders: sources, destination: target, options: options
-        ) { done, total in
-            let percent = total == 0 ? 100 : Int(done * 100 / total)
+        ) { progress in
+            guard progress.stage == .copying else { return }
+            let percent = progress.total == 0 ? 100 : Int(progress.done * 100 / progress.total)
             if percent / 10 != lastShown / 10 { lastShown = percent; print("  \(percent)%") }
         }
 
         if outcome.leftoversRemoved > 0 { print("Removed \(outcome.leftoversRemoved) leftover temporary files.") }
         print("Copied \(outcome.copied.count) files to \(target.path), \(outcome.datesFixed) with a date written.")
+        if options.verify {
+            print("Verified \(outcome.verified) copies against their original; \(outcome.recopied) copied again because they differed.")
+        }
+        for item in outcome.dateNotFixed {
+            print("COPIED WITHOUT DATE \(item.copy.path): \(item.reason)")
+        }
         for failure in outcome.failed {
             print("FAILED \(failure.source.path): \(failure.reason)")
         }

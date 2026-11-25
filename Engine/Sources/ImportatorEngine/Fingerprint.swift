@@ -9,10 +9,18 @@ public enum Fingerprint {
         case dngImageData  // the main image's strips or tiles: Importator writes a date into DNGs
     }
 
-    public enum FingerprintError: Error, Equatable {
+    public enum FingerprintError: Error, Equatable, CustomStringConvertible {
         case notAJPEG
         case notATIFF
         case noMainImage
+
+        public var description: String {
+            switch self {
+            case .notAJPEG: "The file's JPG structure couldn't be read, so its image data couldn't be checked."
+            case .notATIFF: "The file's DNG structure couldn't be read, so its image data couldn't be checked."
+            case .noMainImage: "No main image was found in the DNG, so its image data couldn't be checked."
+            }
+        }
     }
 
     /// Decided by content, not extension: a phone's `.jpg` can be HEIC.

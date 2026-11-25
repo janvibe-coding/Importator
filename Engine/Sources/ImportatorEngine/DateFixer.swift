@@ -36,17 +36,19 @@ public final class DateFixer {
             if cleaned.insert(folder.folderKey).inserted { _ = Copier.removeLeftovers(in: folder) }
             do {
                 guard let date = item.fix.date else { continue }
-                try fixOne(item.file, date: date, metadata: metadata[item.file])
+                try Self.fixInPlace(item.file, date: date, metadata: metadata[item.file], exifTool: exifTool)
                 outcome.fixed.append(item.file)
             } catch {
-                outcome.failed.append((item.file, "\(error)"))
+                outcome.failed.append((item.file, Copier.explain(error)))
             }
             onProgress(number + 1, items.count)
         }
         return outcome
     }
 
-    private func fixOne(_ file: MediaFile, date: String, metadata: Metadata?) throws {
+    /// Writes the date into `file` through a checked temporary copy beside it, which then
+    /// replaces it. When anything fails, `file` is left exactly as it was.
+    static func fixInPlace(_ file: MediaFile, date: String, metadata: Metadata?, exifTool: ExifTool) throws {
         let folder = file.url.deletingLastPathComponent()
         let temp = folder.appendingPathComponent("\(Copier.tempPrefix)\(UUID().uuidString).\(file.url.pathExtension)")
         defer { try? FileManager.default.removeItem(at: temp) }

@@ -62,12 +62,20 @@ struct FolderRow: View {
     @ViewBuilder private var label: some View {
         switch mode {
         case .source:
-            Toggle(isOn: Binding(get: { node.isTicked }, set: { model.setTicked(node, $0) })) {
-                Label(node.title, systemImage: icon).lineLimit(1)
+            HStack(spacing: 4) {
+                Toggle(isOn: Binding(get: { node.isTicked }, set: { model.setTicked(node, $0) })) {
+                    Label(node.title, systemImage: icon).lineLimit(1)
+                }
+                .toggleStyle(.checkbox)
+                .disabled(!node.exists)
+                .help(node.url.path)
+                if node.kind == .card {
+                    Spacer()
+                    Button { model.eject(node) } label: { Image(systemName: "eject") }
+                        .buttonStyle(.borderless)
+                        .disabled(model.isImporting)
+                }
             }
-            .toggleStyle(.checkbox)
-            .disabled(!node.exists)
-            .help(node.url.path)
         case .destination:
             let chosen = model.destination?.folderKey == node.url.folderKey
             Label(node.title, systemImage: icon)
@@ -128,20 +136,7 @@ struct DestinationPanel: View {
                 }
                 .pickerStyle(.segmented)
                 Toggle("Fix missing date", isOn: $model.fixDates).toggleStyle(.checkbox)
-                Toggle("Compare fingerprints", isOn: $model.fingerprints).toggleStyle(.checkbox)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Check duplicates in")
-                    HStack {
-                        Text(model.scope.map(Self.shortPath) ?? "–")
-                            .lineLimit(1)
-                            .truncationMode(.head)
-                            .foregroundColor(.secondary)
-                            .help(model.scope?.path ?? "")
-                        Spacer()
-                        Button("Choose…") { model.chooseScope() }
-                            .disabled(model.destination == nil)
-                    }
-                }
+                Toggle("Verify copies", isOn: $model.verify).toggleStyle(.checkbox)
             }
             .padding(12)
         }
@@ -173,7 +168,8 @@ struct BottomBar: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            if case .importing(let done, let total) = model.activity {
+            if case .importing(let stage, let done, let total) = model.activity {
+                Text(stage == .copying ? "Copying" : "Fixing dates").foregroundColor(.secondary)
                 ProgressView(value: Double(done), total: Double(total))
                     .frame(maxWidth: .infinity)
                 Button("Stop") { model.cancelImport() }
@@ -198,19 +194,30 @@ struct FailuresView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("\(model.failures.count) not copied").font(.headline)
             ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(model.failures, id: \.self) { Text($0).textSelection(.enabled) }
+                VStack(alignment: .leading, spacing: 16) {
+                    if !model.notCopied.isEmpty {
+                        section("\(model.notCopied.count) not copied", model.notCopied, color: .red)
+                    }
+                    if !model.withoutDate.isEmpty {
+                        section("\(model.withoutDate.count) copied without a fixed date", model.withoutDate, color: .orange)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             HStack {
                 Spacer()
-                Button("OK") { model.showFailures = false }.keyboardShortcut(.defaultAction)
+                Button("OK") { model.showReport = false }.keyboardShortcut(.defaultAction)
             }
         }
         .padding(20)
-        .frame(width: 560, height: 360)
+        .frame(width: 600, height: 400)
+    }
+
+    private func section(_ title: String, _ lines: [String], color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.headline).foregroundColor(color)
+            ForEach(lines, id: \.self) { Text($0).textSelection(.enabled) }
+        }
     }
 }

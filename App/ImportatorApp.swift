@@ -42,20 +42,23 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 0) {
+            HSplitView {
                 SourcePanel()
-                    .frame(width: 240)
-                Divider()
+                    .frame(minWidth: 200, idealWidth: 240, maxWidth: 520)
                 GridPanel()
                     .frame(minWidth: 420, maxWidth: .infinity)
-                Divider()
+                    .layoutPriority(1)
                 DestinationPanel()
-                    .frame(width: 290)
+                    .frame(minWidth: 260, idealWidth: 290, maxWidth: 520)
             }
             Divider()
             BottomBar()
         }
         .frame(minWidth: 1100, minHeight: 640)
-        .sheet(isPresented: $model.showFailures) { FailuresView() }
+        .sheet(isPresented: $model.showReport) { FailuresView() }
+        .alert(model.ejectError ?? "", isPresented: Binding(get: { model.ejectError != nil },
+                                                           set: { if !$0 { model.clearEjectError() } })) {
+            Button("OK") { model.clearEjectError() }
+        }
     }
 }
